@@ -1,0 +1,88 @@
+Hostel-Sanitation-Ticket-Management/
+├── CODEOWNERS
+├── README.md
+├── backend/
+│   ├── .gitignore
+│   ├── config/
+│   │   ├── cloudinary.js
+│   │   └── db.js
+│   ├── index.js
+│   ├── middleware/
+│   │   └── authMiddleware.js
+│   ├── ml/
+│   │   ├── cleanliness_model.py
+│   │   └── original_model.py
+│   ├── models/
+│   │   ├── Announcement.js
+│   │   ├── Rating.js
+│   │   ├── Room.js
+│   │   ├── Ticket.js
+│   │   ├── User.js
+│   │   └── VerificationCode.js
+│   ├── node_modules/
+│   ├── package-lock.json
+│   ├── package.json
+│   ├── routes/
+│   │   ├── auth.js
+│   │   ├── caretaker.js
+│   │   ├── studentRoutes.js
+│   │   └── ticketRoutes.js
+│   ├── uploads/
+│   │   └── 1764278505728-WhatsApp Image 2025-11-13 at 19.11.17.jpeg
+│   ├── utils/
+│   │   └── sendMail.js
+│   └── vercel.json
+├── frontend/
+│   ├── .env
+│   ├── .gitignore
+│   ├── README.md
+│   ├── eslint.config.js
+│   ├── index.html
+│   ├── package-lock.json
+│   ├── package.json
+│   ├── postcss.config.js
+│   ├── public/
+│   │   └── vite.svg
+│   ├── src/
+│   │   ├── App.css
+│   │   ├── App.jsx
+│   │   ├── assets/
+│   │   │   └── react.svg
+│   │   ├── components/
+│   │   │   ├── AIConfidenceBadge.jsx
+│   │   │   ├── BubblesBackground.jsx
+│   │   │   ├── CleaningStatusMarker.jsx
+│   │   │   ├── InputField.jsx
+│   │   │   ├── LeavesBackground.jsx
+│   │   │   ├── Navbar.jsx
+│   │   │   ├── ProtectedRoute.jsx
+│   │   │   ├── StaffRating.jsx
+│   │   │   ├── SwirlTransition.jsx
+│   │   │   ├── TicketCard.jsx
+│   │   │   ├── TicketSubmissionForm.jsx
+│   │   │   └── ui/
+│   │   │       ├── avatar.jsx
+│   │   │       ├── badge.jsx
+│   │   │       ├── button.jsx
+│   │   │       ├── card.jsx
+│   │   │       ├── dialog.jsx
+│   │   │       ├── input.jsx
+│   │   │       ├── label.jsx
+│   │   │       └── textarea.jsx
+│   │   ├── index.css
+│   │   ├── lib/
+│   │   │   └── utils.js
+│   │   ├── main.jsx
+│   │   └── pages/
+│   │       ├── DashboardCaretaker.jsx
+│   │       ├── DashboardStudent.css
+│   │       ├── DashboardStudent.jsx
+│   │       ├── Login.jsx
+│   │       ├── SignupCaretaker.css
+│   │       ├── SignupCaretaker.jsx
+│   │       └── SignupStudent.jsx
+│   ├── tailwind.config.js
+│   ├── vercel.json
+│   └── vite.config.js
+├── package-lock.json
+└── package.json
