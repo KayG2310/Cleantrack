@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef} from "react";
+import { useEffect, useState, useRef } from "react";
 import {
     View,
     Text,
@@ -9,61 +9,223 @@ import {
     Pressable,
     TextInput,
     Animated,
+    PanResponder,
+    Modal,
+    KeyboardAvoidingView,
+    Platform,
+    Svg,
+    Dimensions,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import API from "../services/api";
 
+const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
-// ─── Flashcard Stack Component ──────────────────────────────────────────────
-function TicketFlashcard({ tickets, navigation }) {
-    const MAX = 4;
-    const recent = tickets.slice(0, MAX);
-    const [index, setIndex] = useState(0);
-    const slideAnim = useRef(new Animated.Value(0)).current;
- 
-    const current = recent[index];
- 
-    const handleTap = () => {
-        if (recent.length <= 1) return;
-        Animated.timing(slideAnim, {
-            toValue: -450,
-            duration: 280,
-            useNativeDriver: true,
-        }).start(() => {
-            const next = (index + 1) % recent.length;
-            setIndex(next);
-            slideAnim.setValue(450);
-            Animated.timing(slideAnim, {
-                toValue: 0,
-                duration: 280,
-                useNativeDriver: true,
-            }).start();
-        });
+// ─── Creative date formatter ─────────────────────────────────────────────────
+function formatLastCleaned(dateStr) {
+    if (!dateStr) return { line1: "Not yet", line2: "cleaned" };
+    const date = new Date(dateStr);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+    const diffMins = Math.floor(diffMs / (1000 * 60));
+
+    const timeStr = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const dayName = date.toLocaleDateString([], { weekday: "long" });
+    const monthDay = date.toLocaleDateString([], { month: "short", day: "numeric" });
+
+    if (diffMins < 60) return { line1: `${diffMins}m ago`, line2: `at ${timeStr}` };
+    if (diffHours < 24) return { line1: `${diffHours}h ago`, line2: `at ${timeStr}` };
+    if (diffDays === 1) return { line1: "Yesterday", line2: `at ${timeStr}` };
+    if (diffDays < 7) return { line1: `${diffDays} days ago`, line2: `${dayName}` };
+    return { line1: monthDay, line2: `at ${timeStr}` };
+}
+
+/** Newest first so dashboard flashcards and "See all" match recent activity. */
+function sortTicketsNewestFirst(tickets) {
+    const ts = (t) => {
+        const raw = t.createdAt ?? t.updatedAt ?? t.created_at;
+        if (raw) return new Date(raw).getTime();
+        const id = t._id;
+        if (typeof id === "string" && /^[a-f\d]{24}$/i.test(id)) {
+            return parseInt(id.slice(0, 8), 16) * 1000;
+        }
+        return 0;
     };
- 
+    return [...tickets].sort((a, b) => ts(b) - ts(a));
+}
+
+// ─── Light SVG Background ────────────────────────────────────────────────────
+function BgGraphics() {
+    return (
+        <View style={StyleSheet.absoluteFillObject} pointerEvents="none">
+            {/* Top-right large circle */}
+            <View style={bg.circleTopRight} />
+            {/* Mid-left medium circle */}
+            <View style={bg.circleMidLeft} />
+            {/* Bottom-right small circle */}
+            <View style={bg.circleBottomRight} />
+            {/* Leaf shape top-left */}
+            <View style={bg.leafTopLeft} />
+        </View>
+    );
+}
+
+// ─── Ticket Detail Modal ─────────────────────────────────────────────────────
+function TicketModal({ ticket, visible, onClose }) {
+    if (!ticket) return null;
+
     const statusStyle = (status) => {
         if (status === "resolved") return { badge: styles.statusResolved, text: styles.statusTextResolved };
         if (status === "in-progress") return { badge: styles.statusInProgress, text: styles.statusTextInProgress };
         return { badge: styles.statusOpen, text: styles.statusTextOpen };
     };
- 
+
+    const statusDotColor = (status) => {
+        if (status === "resolved") return "#52B788";
+        if (status === "in-progress") return "#4A9ECD";
+        return "#E9A84C";
+    };
+
     return (
-        <View>
+        <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+            <Pressable style={styles.modalOverlay} onPress={onClose}>
+                <Pressable style={styles.modalCard} onPress={() => {}}>
+                    <View style={styles.modalHandle} />
+                    <View style={styles.modalHeader}>
+                        <View style={[styles.modalDot, { backgroundColor: statusDotColor(ticket.status) }]} />
+                        <Text style={styles.modalTitle}>{ticket.title}</Text>
+                    </View>
+                    <View style={[styles.statusBadge, statusStyle(ticket.status).badge, { alignSelf: "flex-start", marginBottom: 16 }]}>
+                        <Text style={[styles.statusText, statusStyle(ticket.status).text]}>
+                            {ticket.status || "open"}
+                        </Text>
+                    </View>
+                    <Text style={styles.modalDesc}>{ticket.description}</Text>
+                    <Pressable style={styles.modalClose} onPress={onClose}>
+                        <Text style={styles.modalCloseText}>Close</Text>
+                    </Pressable>
+                </Pressable>
+            </Pressable>
+        </Modal>
+    );
+}
+
+// ─── Flashcard Stack Component ───────────────────────────────────────────────
+function TicketFlashcard({ tickets, navigation }) {
+    const MAX = 4;
+    const recent = tickets.slice(0, MAX);
+    const [index, setIndex] = useState(0);
+    const [modalTicket, setModalTicket] = useState(null);
+    const [modalVisible, setModalVisible] = useState(false);
+    const slideAnim = useRef(new Animated.Value(0)).current;
+    const SWIPE_THRESHOLD = 40;
+
+    const goToIndex = (next, direction) => {
+        // direction: -1 = left swipe (next), +1 = right swipe (prev)
+        const outTo = direction === -1 ? -SCREEN_WIDTH : SCREEN_WIDTH;
+        const inFrom = direction === -1 ? SCREEN_WIDTH : -SCREEN_WIDTH;
+
+        Animated.timing(slideAnim, {
+            toValue: outTo,
+            duration: 250,
+            useNativeDriver: true,
+        }).start(() => {
+            setIndex(next);
+            slideAnim.setValue(inFrom);
+            Animated.timing(slideAnim, {
+                toValue: 0,
+                duration: 250,
+                useNativeDriver: true,
+            }).start();
+        });
+    };
+
+    const panResponder = useRef(
+        PanResponder.create({
+            onMoveShouldSetPanResponder: (_, g) =>
+                Math.abs(g.dx) > 10 && Math.abs(g.dx) > Math.abs(g.dy),
+            onPanResponderRelease: (_, g) => {
+                if (recent.length <= 1) return;
+                if (g.dx < -SWIPE_THRESHOLD) {
+                    // swiped left → next
+                    const next = (index + 1) % recent.length;
+                    goToIndex(next, -1);
+                } else if (g.dx > SWIPE_THRESHOLD) {
+                    // swiped right → prev
+                    const prev = (index - 1 + recent.length) % recent.length;
+                    goToIndex(prev, 1);
+                }
+            },
+        })
+    ).current;
+
+    // Rebuild panResponder when index changes
+    const indexRef = useRef(index);
+    useEffect(() => { indexRef.current = index; }, [index]);
+
+    const panResponderLive = useRef(
+        PanResponder.create({
+            onMoveShouldSetPanResponder: (_, g) =>
+                Math.abs(g.dx) > 10 && Math.abs(g.dx) > Math.abs(g.dy),
+            onPanResponderRelease: (_, g) => {
+                if (recent.length <= 1) return;
+                const cur = indexRef.current;
+                if (g.dx < -SWIPE_THRESHOLD) {
+                    const next = (cur + 1) % recent.length;
+                    goToIndex(next, -1);
+                } else if (g.dx > SWIPE_THRESHOLD) {
+                    const prev = (cur - 1 + recent.length) % recent.length;
+                    goToIndex(prev, 1);
+                }
+            },
+        })
+    ).current;
+
+    const current = recent[index];
+
+    const statusStyle = (status) => {
+        if (status === "resolved") return { badge: styles.statusResolved, text: styles.statusTextResolved };
+        if (status === "in-progress") return { badge: styles.statusInProgress, text: styles.statusTextInProgress };
+        return { badge: styles.statusOpen, text: styles.statusTextOpen };
+    };
+
+    const statusDotColor = (status) => {
+        if (status === "resolved") return "#52B788";
+        if (status === "in-progress") return "#4A9ECD";
+        return "#E9A84C";
+    };
+
+    const handlePress = () => {
+        setModalTicket(current);
+        setModalVisible(true);
+    };
+
+    return (
+        <View style={styles.ticketsSection}>
             <View style={styles.sectionHeader}>
                 <Text style={styles.sectionTitle}>Your Tickets</Text>
-                <Pressable onPress={() => navigation.navigate("AllTickets", { tickets })}>
+                <Pressable
+                    style={styles.seeAllPill}
+                    onPress={() => navigation.navigate("AllTickets", { tickets })}
+                >
                     <Text style={styles.seeAll}>See all →</Text>
                 </Pressable>
             </View>
- 
-            <View style={styles.stackWrapper}>
-                {/* Decorative stacked cards behind */}
+
+            <View style={styles.stackWrapper} {...panResponderLive.panHandlers}>
                 <View style={[styles.stackCard, styles.stackCard3]} />
                 <View style={[styles.stackCard, styles.stackCard2]} />
- 
-                {/* Animated front card */}
+
                 <Animated.View style={{ transform: [{ translateX: slideAnim }] }}>
-                    <Pressable style={styles.ticketCard} onPress={handleTap} activeOpacity={0.9}>
+                    <Pressable style={styles.ticketCard} onPress={handlePress} activeOpacity={0.92}>
+                        <View
+                            style={[
+                                styles.ticketAccentDot,
+                                { backgroundColor: statusDotColor(current.status) },
+                            ]}
+                        />
                         <View style={styles.ticketTop}>
                             <Text style={styles.ticketTitle} numberOfLines={1} ellipsizeMode="tail">
                                 {current.title}
@@ -74,61 +236,63 @@ function TicketFlashcard({ tickets, navigation }) {
                                 </Text>
                             </View>
                         </View>
-                        <Text style={styles.ticketDesc} numberOfLines={1} ellipsizeMode="tail">
+                        <Text style={styles.ticketDesc} numberOfLines={2} ellipsizeMode="tail">
                             {current.description}
                         </Text>
-                        {recent.length > 1 && (
-                            <Text style={styles.tapHint}>Tap to see next →</Text>
-                        )}
+                        <View style={styles.ticketFooter}>
+                            <Text style={styles.tapHint}>Tap to read · Swipe to browse</Text>
+                        </View>
                     </Pressable>
                 </Animated.View>
             </View>
- 
-            {/* Dot indicators */}
+
             <View style={styles.dotsRow}>
                 {recent.map((_, i) => (
                     <View key={i} style={[styles.dot, i === index && styles.dotActive]} />
                 ))}
             </View>
- 
+
             {tickets.length > MAX && (
                 <Pressable
                     style={styles.seeAllButton}
                     onPress={() => navigation.navigate("AllTickets", { tickets })}
                 >
-                    <Text style={styles.seeAllButtonText}>
-                        +{tickets.length - MAX} more tickets
-                    </Text>
+                    <Text style={styles.seeAllButtonText}>+{tickets.length - MAX} more tickets</Text>
                 </Pressable>
             )}
+
+            <TicketModal
+                ticket={modalTicket}
+                visible={modalVisible}
+                onClose={() => setModalVisible(false)}
+            />
         </View>
     );
 }
 
 
-// ─── Main Screen ───────────────────────────────────────────────────────────── (This is the initial main)
-export default function DashboardStudentScreen({ navigation , setIsLoggedIn}) {
+// ─── Main Screen ──────────────────────────────────────────────────────────────
+export default function DashboardStudentScreen({ navigation, setIsLoggedIn }) {
     const [loading, setLoading] = useState(true);
     const [userData, setUserData] = useState(null);
     const [tickets, setTickets] = useState([]);
-
     const [showForm, setShowForm] = useState(false);
     const [title, setTitle] = useState("");
     const [description, setDescription] = useState("");
+
+    const scrollRef = useRef(null);
+    const formRef = useRef(null);
 
     useEffect(() => {
         const fetchData = async () => {
             try {
                 const token = await AsyncStorage.getItem("token");
-
                 const res = await API.get("/api/student/dashboard-student", {
                     headers: { Authorization: `Bearer ${token}` },
                 });
-
                 const payload = res.data || {};
                 const user = payload.user || {};
                 const room = payload.room || {};
-
                 setUserData({
                     id: user._id,
                     name: user.name,
@@ -137,16 +301,11 @@ export default function DashboardStudentScreen({ navigation , setIsLoggedIn}) {
                     caretaker: room.caretaker || "Unassigned",
                     lastCleaned: room.lastCleaned || null,
                 });
-
-                // ✅ fetch tickets
                 const ticketRes = await API.get(
                     `/api/tickets/student/${user.email}`,
-                    {
-                        headers: { Authorization: `Bearer ${token}` },
-                    }
+                    { headers: { Authorization: `Bearer ${token}` } }
                 );
-
-                setTickets(ticketRes.data || []);
+                setTickets(sortTicketsNewestFirst(ticketRes.data || []));
             } catch (err) {
                 Alert.alert("Error", "Failed to load dashboard");
                 navigation.navigate("Login");
@@ -154,9 +313,19 @@ export default function DashboardStudentScreen({ navigation , setIsLoggedIn}) {
                 setLoading(false);
             }
         };
-
         fetchData();
     }, []);
+
+    const handleRaiseTicket = () => {
+        const next = !showForm;
+        setShowForm(next);
+        if (next) {
+            // Scroll to bottom after state settles
+            setTimeout(() => {
+                scrollRef.current?.scrollToEnd({ animated: true });
+            }, 120);
+        }
+    };
 
     const handleCreateTicket = async () => {
         try {
@@ -170,31 +339,29 @@ export default function DashboardStudentScreen({ navigation , setIsLoggedIn}) {
                     title,
                     description,
                 },
-                {
-                    headers: { Authorization: `Bearer ${token}` },
-                }
+                { headers: { Authorization: `Bearer ${token}` } }
             );
-
             const created = res.data.ticket || res.data;
-
             setTickets((prev) => [created, ...prev]);
             setShowForm(false);
             setTitle("");
             setDescription("");
-
             Alert.alert("Success", "Ticket created!");
         } catch (err) {
             Alert.alert("Error", "Failed to create ticket");
         }
     };
+
     const handleLogout = async () => {
         await AsyncStorage.removeItem("token");
         setIsLoggedIn(false);
     };
+
     if (loading) {
         return (
             <View style={styles.center}>
-                <ActivityIndicator size="large" color="#2D6A4F" />
+                <ActivityIndicator size="large" color={GREEN_DARK} />
+                <Text style={styles.loadingText}>Loading your space…</Text>
             </View>
         );
     }
@@ -202,207 +369,472 @@ export default function DashboardStudentScreen({ navigation , setIsLoggedIn}) {
     if (!userData) {
         return (
             <View style={styles.center}>
-                <Text>Failed to load dashboard</Text>
+                <Text style={styles.errorText}>Failed to load dashboard</Text>
             </View>
         );
     }
-    // UI
+
+    const cleaned = formatLastCleaned(userData.lastCleaned);
+
     return (
-        <ScrollView style={styles.scrollView} contentContainerStyle={styles.container}>
- 
-            {/* UNIFIED HERO CARD */}
-            <View style={styles.heroCard}>
-                <View style={styles.heroTop}>
+        <KeyboardAvoidingView
+            style={{ flex: 1 }}
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
+        >
+            <ScrollView
+                ref={scrollRef}
+                style={styles.scrollView}
+                contentContainerStyle={styles.container}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+            >
+                {/* Background graphics */}
+                <BgGraphics />
+
+                {/* ── TOP BAR ── */}
+                <View style={styles.topBar}>
                     <View>
-                        <Text style={styles.greeting}>Welcome back 👋</Text>
-                        <Text style={styles.title}>{userData.name}</Text>
+                        <Text style={styles.greeting}>Good day 🌿</Text>
+                        <Text style={styles.userName}>{userData.name}</Text>
                     </View>
                     <Pressable style={styles.logoutButton} onPress={handleLogout}>
-                        <Text style={styles.logoutText}>Logout</Text>
+                        <Text style={styles.logoutText}>Log out</Text>
                     </Pressable>
                 </View>
- 
-                <View style={styles.heroDivider} />
- 
-                <View style={styles.cardRow}>
-                    <View style={styles.infoBlock}>
-                        <Text style={styles.label}>Caretaker</Text>
-                        <Text style={styles.value}>{userData.caretaker}</Text>
-                    </View>
-                    <View style={styles.infoBlockDivider} />
-                    <View style={styles.infoBlock}>
-                        <Text style={styles.label}>Room</Text>
-                        <Text style={styles.value}>{userData.roomNumber}</Text>
+
+                {/* ── HERO CARD ── */}
+                <View style={styles.heroCard}>
+                    <View style={styles.blobTopRight} />
+                    <View style={styles.blobBottomLeft} />
+
+                    <View style={styles.heroInner}>
+                        <View style={styles.chipsRow}>
+                            <View style={styles.chip}>
+                                <Text style={styles.chipLabel}>ROOM</Text>
+                                <Text style={styles.chipValue}>{userData.roomNumber}</Text>
+                            </View>
+                            <View style={[styles.chip, styles.chipAlt]}>
+                                <Text style={styles.chipLabel}>CARETAKER</Text>
+                                <Text style={styles.chipValue}>{userData.caretaker}</Text>
+                            </View>
+                        </View>
+
+                        <View style={styles.heroDivider} />
+
+                        {/* Last Cleaned — creative format */}
+                        <View style={styles.lastCleanedRow}>
+                            <View style={styles.lastCleanedIconWrap}>
+                                <Text style={styles.lastCleanedIconEmoji}>🧹</Text>
+                            </View>
+                            <View style={styles.lastCleanedTextCol}>
+                                <Text style={styles.lastCleanedLabel}>Last cleaned</Text>
+                                <Text style={styles.lastCleanedLine1}>{cleaned.line1}</Text>
+                                <Text style={styles.lastCleanedLine2}>{cleaned.line2}</Text>
+                            </View>
+                            {userData.lastCleaned && (
+                                <View style={styles.lastCleanedBadge}>
+                                    <Text style={styles.lastCleanedBadgeText}>✓ Done</Text>
+                                </View>
+                            )}
+                        </View>
                     </View>
                 </View>
- 
-                <View style={styles.lastCleanedRow}>
-                    <View style={styles.lastCleanedDot} />
-                    <Text style={styles.lastCleanedText}>
-                        Last cleaned:{" "}
-                        <Text style={styles.lastCleanedValue}>
-                            {userData.lastCleaned
-                                ? new Date(userData.lastCleaned).toLocaleString()
-                                : "Not yet cleaned"}
-                        </Text>
+
+                {/* ── TICKETS ── */}
+                {tickets.length === 0 ? (
+                    <View style={styles.ticketsSection}>
+                        <View style={styles.sectionHeader}>
+                            <Text style={styles.sectionTitle}>Your Tickets</Text>
+                        </View>
+                        <View style={styles.emptyState}>
+                            <View style={styles.emptyIconWrap}>
+                                <Text style={styles.emptyIcon}>🗒️</Text>
+                            </View>
+                            <Text style={styles.emptyTitle}>No tickets yet</Text>
+                            <Text style={styles.emptySubtext}>
+                                Raise a ticket to report any issues with your room
+                            </Text>
+                        </View>
+                    </View>
+                ) : (
+                    <TicketFlashcard tickets={tickets} navigation={navigation} />
+                )}
+
+                {/* ── RAISE TICKET BUTTON ── */}
+                <Pressable
+                    style={({ pressed }) => [styles.raiseButton, pressed && styles.raiseButtonPressed]}
+                    onPress={handleRaiseTicket}
+                >
+                    <Text style={styles.raiseButtonIcon}>{showForm ? "✕" : "+"}</Text>
+                    <Text style={styles.raiseButtonText}>
+                        {showForm ? "Cancel" : "Raise a Ticket"}
                     </Text>
-                </View>
-            </View>
- 
-            {/* TICKETS */}
-            {tickets.length === 0 ? (
-                <>
-                    <View style={styles.sectionHeader}>
-                        <Text style={styles.sectionTitle}>Your Tickets</Text>
+                </Pressable>
+
+                {/* ── FORM ── */}
+                {showForm && (
+                    <View
+                        ref={formRef}
+                        style={styles.form}
+                        onLayout={() => {
+                            setTimeout(() => {
+                                scrollRef.current?.scrollToEnd({ animated: true });
+                            }, 80);
+                        }}
+                    >
+                        <Text style={styles.formTitle}>New Ticket</Text>
+                        <Text style={styles.formSubtitle}>
+                            Describe your issue clearly so your caretaker can help you faster.
+                        </Text>
+
+                        <Text style={styles.inputLabel}>Title</Text>
+                        <TextInput
+                            placeholder="e.g. Broken tap in bathroom"
+                            placeholderTextColor="#B0CCBB"
+                            style={styles.input}
+                            value={title}
+                            onChangeText={setTitle}
+                            onFocus={() => {
+                                setTimeout(() => {
+                                    scrollRef.current?.scrollToEnd({ animated: true });
+                                }, 300);
+                            }}
+                        />
+
+                        <Text style={styles.inputLabel}>Description</Text>
+                        <TextInput
+                            placeholder="Describe the issue in detail…"
+                            placeholderTextColor="#B0CCBB"
+                            style={[styles.input, styles.textArea]}
+                            value={description}
+                            onChangeText={setDescription}
+                            multiline
+                            numberOfLines={4}
+                            onFocus={() => {
+                                setTimeout(() => {
+                                    scrollRef.current?.scrollToEnd({ animated: true });
+                                }, 300);
+                            }}
+                        />
+
+                        <Pressable style={styles.submitButton} onPress={handleCreateTicket}>
+                            <Text style={styles.submitButtonText}>Submit Ticket</Text>
+                        </Pressable>
                     </View>
-                    <View style={styles.emptyState}>
-                        <Text style={styles.emptyIcon}>🗒️</Text>
-                        <Text style={styles.emptyText}>No tickets raised yet</Text>
-                    </View>
-                </>
-            ) : (
-                <TicketFlashcard tickets={tickets} navigation={navigation} />
-            )}
- 
-            {/* RAISE TICKET BUTTON */}
-            <Pressable style={styles.button} onPress={() => setShowForm(!showForm)}>
-                <Text style={styles.buttonText}>
-                    {showForm ? "✕  Cancel" : "+ Raise a Ticket"}
-                </Text>
-            </Pressable>
- 
-            {/* FORM */}
-            {showForm && (
-                <View style={styles.form}>
-                    <Text style={styles.formTitle}>New Ticket</Text>
-                    <TextInput
-                        placeholder="Title"
-                        placeholderTextColor="#A8C5B5"
-                        style={styles.input}
-                        value={title}
-                        onChangeText={setTitle}
-                    />
-                    <TextInput
-                        placeholder="Describe the issue..."
-                        placeholderTextColor="#A8C5B5"
-                        style={[styles.input, styles.textArea]}
-                        value={description}
-                        onChangeText={setDescription}
-                        multiline
-                        numberOfLines={4}
-                    />
-                    <Pressable style={styles.submitButton} onPress={handleCreateTicket}>
-                        <Text style={styles.buttonText}>Submit Ticket</Text>
-                    </Pressable>
-                </View>
-            )}
- 
-            <View style={{ height: 40 }} />
-        </ScrollView>
+                )}
+
+                <View style={{ height: 48 }} />
+            </ScrollView>
+        </KeyboardAvoidingView>
     );
 }
- 
-// ─── STYLES ──────────────────────────────────────────────────────────────────
- 
-const GREEN_DARK  = "#2D6A4F";
-const GREEN_MID   = "#52B788";
-const GREEN_LIGHT = "#D8F3DC";
-const GREEN_MINT  = "#F0FAF4";
-const TEXT_DARK   = "#1B2E24";
-const TEXT_GRAY   = "#6B8F7A";
+
+
+// ─── DESIGN TOKENS ───────────────────────────────────────────────────────────
+const GREEN_DARK  = "#1E5C3A";
+const GREEN_MID   = "#4CAF77";
+const GREEN_LIGHT = "#D4EDE0";
+const GREEN_MINT  = "#EEF8F1";
+const GREEN_HERO  = "#2A7A4F";
+const CREAM       = "#F7FAF8";
+const TEXT_DARK   = "#152820";
+const TEXT_GRAY   = "#6A8C77";
+const TEXT_MUTED  = "#9DBDAA";
 const WHITE       = "#FFFFFF";
- 
+
+
+// ─── BACKGROUND GRAPHICS ────────────────────────────────────────────────────
+const bg = StyleSheet.create({
+    circleTopRight: {
+        position: "absolute", top: -60, right: -60,
+        width: 200, height: 200, borderRadius: 100,
+        backgroundColor: "rgba(76,175,119,0.055)",
+    },
+    circleMidLeft: {
+        position: "absolute", top: 320, left: -80,
+        width: 180, height: 180, borderRadius: 90,
+        backgroundColor: "rgba(76,175,119,0.04)",
+    },
+    circleBottomRight: {
+        position: "absolute", top: 640, right: -50,
+        width: 140, height: 140, borderRadius: 70,
+        backgroundColor: "rgba(76,175,119,0.045)",
+    },
+    leafTopLeft: {
+        position: "absolute", top: 110, left: -30,
+        width: 90, height: 90, borderRadius: 45,
+        borderTopLeftRadius: 0,
+        backgroundColor: "rgba(76,175,119,0.035)",
+        transform: [{ rotate: "45deg" }],
+    },
+});
+
+
+// ─── STYLES ──────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-    scrollView: { flex: 1, backgroundColor: WHITE },
-    container: { padding: 20, paddingTop: 56 },
-    center: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: WHITE },
- 
-    heroCard: {
-        backgroundColor: WHITE, borderRadius: 24, padding: 22, marginBottom: 28,
-        shadowColor: GREEN_DARK, shadowOffset: { width: 0, height: 6 },
-        shadowOpacity: 0.09, shadowRadius: 16, elevation: 5,
+
+    scrollView: { flex: 1, backgroundColor: CREAM },
+    container: { paddingHorizontal: 20, paddingTop: 56, paddingBottom: 20 },
+    center: {
+        flex: 1, justifyContent: "center", alignItems: "center",
+        backgroundColor: CREAM, gap: 12,
     },
-    heroTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 18 },
-    heroDivider: { height: 1, backgroundColor: GREEN_LIGHT, marginBottom: 18 },
-    greeting: { fontSize: 13, color: TEXT_GRAY, fontWeight: "500", marginBottom: 3 },
-    title: { fontSize: 22, fontWeight: "700", color: TEXT_DARK, letterSpacing: -0.5 },
+    loadingText: { fontSize: 14, color: TEXT_GRAY, fontWeight: "500" },
+    errorText: { fontSize: 15, color: TEXT_GRAY, fontWeight: "500" },
+
+    // Top Bar — no gap between screen title (nav header) and greeting
+    topBar: {
+        flexDirection: "row", justifyContent: "space-between",
+        alignItems: "flex-start", marginBottom: 22,
+        // paddingTop: 0 ensures it sits flush under the nav bar
+        paddingTop: 0,
+    },
+    greeting: {
+        fontSize: 13, color: TEXT_MUTED, fontWeight: "500",
+        letterSpacing: 0.2, marginBottom: 2,
+    },
+    userName: {
+        fontSize: 24, fontWeight: "800", color: TEXT_DARK, letterSpacing: -0.6,
+    },
     logoutButton: {
-        backgroundColor: "#FFF0F0", paddingHorizontal: 14, paddingVertical: 8,
-        borderRadius: 20, borderWidth: 1, borderColor: "#FFCDD2",
+        backgroundColor: WHITE, paddingHorizontal: 16, paddingVertical: 9,
+        borderRadius: 24, borderWidth: 1.5, borderColor: GREEN_LIGHT,
+        shadowColor: GREEN_DARK, shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.06, shadowRadius: 6, elevation: 2,
     },
-    logoutText: { color: "#C62828", fontWeight: "600", fontSize: 13 },
-    cardRow: { flexDirection: "row", alignItems: "center", marginBottom: 16 },
-    infoBlock: { flex: 1, alignItems: "center", justifyContent: "center" },
-    infoBlockDivider: { width: 1, height: 40, backgroundColor: GREEN_LIGHT },
-    label: { fontSize: 12, color: TEXT_GRAY, fontWeight: "500", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 },
-    value: { fontSize: 17, fontWeight: "700", color: TEXT_DARK },
-    lastCleanedRow: { flexDirection: "row", alignItems: "center", backgroundColor: GREEN_MINT, borderRadius: 12, padding: 12 },
-    lastCleanedDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: GREEN_MID, marginRight: 8 },
-    lastCleanedText: { fontSize: 13, color: TEXT_GRAY, fontWeight: "500" },
-    lastCleanedValue: { color: GREEN_DARK, fontWeight: "700" },
- 
-    sectionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 14 },
-    sectionTitle: { fontSize: 18, fontWeight: "700", color: TEXT_DARK, letterSpacing: -0.3 },
-    seeAll: { fontSize: 13, color: GREEN_MID, fontWeight: "600" },
- 
-    // Flashcard stack
-    stackWrapper: { marginBottom: 20 },
+    logoutText: { color: GREEN_DARK, fontWeight: "700", fontSize: 13 },
+
+    // Hero Card
+    heroCard: {
+        backgroundColor: GREEN_HERO, borderRadius: 28, marginBottom: 28,
+        overflow: "hidden",
+        shadowColor: GREEN_DARK, shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.22, shadowRadius: 20, elevation: 8,
+    },
+    blobTopRight: {
+        position: "absolute", top: -30, right: -30,
+        width: 120, height: 120, borderRadius: 60,
+        backgroundColor: "rgba(255,255,255,0.07)",
+    },
+    blobBottomLeft: {
+        position: "absolute", bottom: -40, left: -20,
+        width: 100, height: 100, borderRadius: 50,
+        backgroundColor: "rgba(255,255,255,0.05)",
+    },
+    heroInner: { padding: 22 },
+    chipsRow: { flexDirection: "row", gap: 10, marginBottom: 20 },
+    chip: {
+        flex: 1, backgroundColor: "rgba(255,255,255,0.13)",
+        borderRadius: 16, padding: 14,
+        borderWidth: 1, borderColor: "rgba(255,255,255,0.18)",
+    },
+    chipAlt: { backgroundColor: "rgba(255,255,255,0.08)" },
+    chipLabel: {
+        fontSize: 10, color: "rgba(255,255,255,0.6)", fontWeight: "700",
+        letterSpacing: 1.2, marginBottom: 5,
+    },
+    chipValue: {
+        fontSize: 17, fontWeight: "800", color: WHITE, letterSpacing: -0.3,
+    },
+    heroDivider: {
+        height: 1, backgroundColor: "rgba(255,255,255,0.12)", marginBottom: 18,
+    },
+
+    // Last Cleaned — creative
+    lastCleanedRow: {
+        flexDirection: "row", alignItems: "center", gap: 12,
+    },
+    lastCleanedIconWrap: {
+        width: 40, height: 40, borderRadius: 14,
+        backgroundColor: "rgba(255,255,255,0.15)",
+        justifyContent: "center", alignItems: "center",
+    },
+    lastCleanedIconEmoji: { fontSize: 18 },
+    lastCleanedTextCol: { flex: 1 },
+    lastCleanedLabel: {
+        fontSize: 10, color: "rgba(255,255,255,0.5)",
+        fontWeight: "700", letterSpacing: 1, textTransform: "uppercase", marginBottom: 2,
+    },
+    lastCleanedLine1: {
+        fontSize: 17, fontWeight: "800", color: WHITE, letterSpacing: -0.3,
+    },
+    lastCleanedLine2: {
+        fontSize: 12, color: "rgba(255,255,255,0.65)", fontWeight: "500", marginTop: 1,
+    },
+    lastCleanedBadge: {
+        backgroundColor: "rgba(255,255,255,0.18)", borderRadius: 20,
+        paddingHorizontal: 10, paddingVertical: 5,
+        borderWidth: 1, borderColor: "rgba(255,255,255,0.25)",
+    },
+    lastCleanedBadgeText: {
+        fontSize: 11, color: WHITE, fontWeight: "700",
+    },
+
+    // Section common
+    ticketsSection: { marginBottom: 6 },
+    sectionHeader: {
+        flexDirection: "row", justifyContent: "space-between",
+        alignItems: "center", marginBottom: 16,
+    },
+    sectionTitle: {
+        fontSize: 18, fontWeight: "800", color: TEXT_DARK, letterSpacing: -0.4,
+    },
+    seeAllPill: {
+        backgroundColor: GREEN_MINT, paddingHorizontal: 12,
+        paddingVertical: 6, borderRadius: 20,
+    },
+    seeAll: { fontSize: 13, color: GREEN_MID, fontWeight: "700" },
+
+    // Flashcard Stack
+    stackWrapper: { marginBottom: 16 },
     stackCard: {
         position: "absolute", left: 0, right: 0,
-        backgroundColor: WHITE, borderRadius: 16,
-        borderLeftWidth: 4, borderLeftColor: GREEN_MID,
+        backgroundColor: WHITE, borderRadius: 20,
         shadowColor: GREEN_DARK, shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.06, shadowRadius: 8, elevation: 2, height: 90,
+        shadowOpacity: 0.05, shadowRadius: 8, elevation: 2, height: 110,
     },
-    stackCard2: { bottom: -7, marginHorizontal: 10, opacity: 0.45 },
-    stackCard3: { bottom: -14, marginHorizontal: 20, opacity: 0.2 },
+    stackCard2: { bottom: -8, marginHorizontal: 12, opacity: 0.5 },
+    stackCard3: { bottom: -16, marginHorizontal: 24, opacity: 0.25 },
+
     ticketCard: {
-        backgroundColor: WHITE, borderRadius: 16, padding: 18,
-        borderLeftWidth: 4, borderLeftColor: GREEN_MID,
-        shadowColor: GREEN_DARK, shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.1, shadowRadius: 12, elevation: 4,
-        height: 90, justifyContent: "center",
+        backgroundColor: WHITE, borderRadius: 20, padding: 18,
+        shadowColor: GREEN_DARK, shadowOffset: { width: 0, height: 5 },
+        shadowOpacity: 0.1, shadowRadius: 14, elevation: 4,
+        minHeight: 110, justifyContent: "center",
     },
-    ticketTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 6 },
-    ticketTitle: { fontWeight: "700", fontSize: 15, color: TEXT_DARK, flex: 1, marginRight: 8 },
-    ticketDesc: { fontSize: 13, color: TEXT_GRAY },
-    tapHint: { fontSize: 11, color: GREEN_MID, fontWeight: "600", marginTop: 6, textAlign: "right" },
- 
+    ticketAccentDot: {
+        position: "absolute", top: 20, left: 18,
+        width: 8, height: 8, borderRadius: 4,
+    },
+    ticketTop: {
+        flexDirection: "row", justifyContent: "space-between",
+        alignItems: "center", marginBottom: 7, paddingLeft: 16,
+    },
+    ticketTitle: {
+        fontWeight: "800", fontSize: 15, color: TEXT_DARK,
+        flex: 1, marginRight: 10, letterSpacing: -0.2,
+    },
+    ticketDesc: { fontSize: 13, color: TEXT_GRAY, paddingLeft: 16, lineHeight: 18 },
+    ticketFooter: { paddingLeft: 16, marginTop: 8 },
+    tapHint: {
+        fontSize: 11, color: TEXT_MUTED, fontWeight: "500", letterSpacing: 0.1,
+    },
+
+    // Status badges
     statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20 },
     statusText: { fontSize: 11, fontWeight: "700", textTransform: "capitalize" },
-    statusOpen: { backgroundColor: "#FFF9E6" },
-    statusTextOpen: { color: "#B7791F" },
-    statusInProgress: { backgroundColor: "#EBF4FF" },
-    statusTextInProgress: { color: "#2B6CB0" },
+    statusOpen: { backgroundColor: "#FEF3D7" },
+    statusTextOpen: { color: "#996A00" },
+    statusInProgress: { backgroundColor: "#E0F0FA" },
+    statusTextInProgress: { color: "#1D6B9B" },
     statusResolved: { backgroundColor: GREEN_LIGHT },
     statusTextResolved: { color: GREEN_DARK },
- 
-    dotsRow: { flexDirection: "row", justifyContent: "center", marginBottom: 12, gap: 6 },
+
+    // Dots
+    dotsRow: { flexDirection: "row", justifyContent: "center", marginBottom: 14, gap: 5 },
     dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: GREEN_LIGHT },
-    dotActive: { width: 18, backgroundColor: GREEN_MID },
- 
-    seeAllButton: { alignItems: "center", paddingVertical: 10, marginBottom: 4 },
-    seeAllButtonText: { color: TEXT_GRAY, fontSize: 13, fontWeight: "500" },
- 
-    emptyState: { alignItems: "center", paddingVertical: 32, backgroundColor: WHITE, borderRadius: 20, marginBottom: 12 },
-    emptyIcon: { fontSize: 36, marginBottom: 8 },
-    emptyText: { color: TEXT_GRAY, fontSize: 14, fontWeight: "500" },
- 
-    button: {
-        backgroundColor: GREEN_DARK, paddingVertical: 15, borderRadius: 16, marginTop: 16,
-        shadowColor: GREEN_DARK, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 8, elevation: 4,
+    dotActive: { width: 20, borderRadius: 3, backgroundColor: GREEN_MID },
+
+    seeAllButton: { alignItems: "center", paddingVertical: 10 },
+    seeAllButtonText: { color: TEXT_MUTED, fontSize: 13, fontWeight: "600" },
+
+    // Empty State
+    emptyState: {
+        alignItems: "center", paddingVertical: 36,
+        backgroundColor: WHITE, borderRadius: 24, marginBottom: 4,
+        shadowColor: GREEN_DARK, shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.05, shadowRadius: 10, elevation: 2,
     },
-    buttonText: { color: WHITE, textAlign: "center", fontWeight: "700", fontSize: 15, letterSpacing: 0.3 },
- 
+    emptyIconWrap: {
+        width: 64, height: 64, borderRadius: 20,
+        backgroundColor: GREEN_MINT, justifyContent: "center",
+        alignItems: "center", marginBottom: 14,
+    },
+    emptyIcon: { fontSize: 30 },
+    emptyTitle: { fontSize: 16, fontWeight: "800", color: TEXT_DARK, marginBottom: 6 },
+    emptySubtext: {
+        fontSize: 13, color: TEXT_GRAY, textAlign: "center",
+        paddingHorizontal: 32, lineHeight: 19,
+    },
+
+    // Raise Ticket Button
+    raiseButton: {
+        backgroundColor: GREEN_DARK, paddingVertical: 17, borderRadius: 20, marginTop: 20,
+        flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10,
+        shadowColor: GREEN_DARK, shadowOffset: { width: 0, height: 6 },
+        shadowOpacity: 0.28, shadowRadius: 12, elevation: 6,
+    },
+    raiseButtonPressed: { opacity: 0.88 },
+    raiseButtonIcon: {
+        color: "rgba(255,255,255,0.7)", fontSize: 20, fontWeight: "300", lineHeight: 22,
+    },
+    raiseButtonText: { color: WHITE, fontWeight: "800", fontSize: 15, letterSpacing: 0.2 },
+
+    // Form
     form: {
-        marginTop: 16, backgroundColor: WHITE, padding: 20, borderRadius: 20,
-        shadowColor: GREEN_DARK, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.08, shadowRadius: 12, elevation: 3,
+        marginTop: 16, backgroundColor: WHITE, padding: 22, borderRadius: 24,
+        shadowColor: GREEN_DARK, shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.07, shadowRadius: 14, elevation: 3,
     },
-    formTitle: { fontSize: 16, fontWeight: "700", color: TEXT_DARK, marginBottom: 14 },
+    formTitle: {
+        fontSize: 18, fontWeight: "800", color: TEXT_DARK,
+        letterSpacing: -0.4, marginBottom: 6,
+    },
+    formSubtitle: { fontSize: 13, color: TEXT_GRAY, lineHeight: 19, marginBottom: 20 },
+    inputLabel: {
+        fontSize: 12, fontWeight: "700", color: TEXT_GRAY,
+        letterSpacing: 0.8, textTransform: "uppercase", marginBottom: 7,
+    },
     input: {
         borderWidth: 1.5, borderColor: GREEN_LIGHT, backgroundColor: GREEN_MINT,
-        padding: 13, borderRadius: 12, marginBottom: 12, fontSize: 14, color: TEXT_DARK,
+        padding: 14, borderRadius: 14, marginBottom: 16, fontSize: 14,
+        color: TEXT_DARK, fontWeight: "500",
     },
-    textArea: { height: 100, textAlignVertical: "top" },
-    submitButton: { backgroundColor: GREEN_MID, paddingVertical: 14, borderRadius: 14, marginTop: 4 },
+    textArea: { height: 110, textAlignVertical: "top" },
+    submitButton: {
+        backgroundColor: GREEN_MID, paddingVertical: 16, borderRadius: 16, marginTop: 4,
+        shadowColor: GREEN_MID, shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.25, shadowRadius: 8, elevation: 4,
+    },
+    submitButtonText: {
+        color: WHITE, textAlign: "center", fontWeight: "800", fontSize: 15, letterSpacing: 0.3,
+    },
+
+    // Ticket Modal
+    modalOverlay: {
+        flex: 1, backgroundColor: "rgba(15,35,25,0.45)",
+        justifyContent: "flex-end",
+    },
+    modalCard: {
+        backgroundColor: WHITE, borderTopLeftRadius: 28, borderTopRightRadius: 28,
+        padding: 24, paddingBottom: 40,
+        shadowColor: "#000", shadowOffset: { width: 0, height: -4 },
+        shadowOpacity: 0.1, shadowRadius: 16, elevation: 10,
+    },
+    modalHandle: {
+        width: 40, height: 4, borderRadius: 2, backgroundColor: GREEN_LIGHT,
+        alignSelf: "center", marginBottom: 20,
+    },
+    modalHeader: {
+        flexDirection: "row", alignItems: "flex-start", gap: 10, marginBottom: 10,
+    },
+    modalDot: {
+        width: 10, height: 10, borderRadius: 5, marginTop: 5,
+    },
+    modalTitle: {
+        fontSize: 18, fontWeight: "800", color: TEXT_DARK,
+        flex: 1, letterSpacing: -0.3, lineHeight: 24,
+    },
+    modalDesc: {
+        fontSize: 14, color: TEXT_GRAY, lineHeight: 22,
+        marginBottom: 24,
+    },
+    modalClose: {
+        backgroundColor: GREEN_MINT, paddingVertical: 14, borderRadius: 16,
+        borderWidth: 1.5, borderColor: GREEN_LIGHT,
+    },
+    modalCloseText: {
+        color: GREEN_DARK, textAlign: "center", fontWeight: "700", fontSize: 14,
+    },
 });
