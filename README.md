@@ -1,5 +1,9 @@
 # CleanTrack — Hostel Sanitation Ticket Management (Mobile + Backend)
 
+<p align="center">
+  <img src="docs/sd.jpeg" alt="CleanTrack app" width="360" />
+</p>
+
 ## Overview
 
 CleanTrack is a full-stack mobile application designed to streamline hostel sanitation management. Students can report cleanliness issues, track tickets, and view room details, while caretakers can manage and respond to these tickets. In process - not yet finished. 
@@ -51,7 +55,9 @@ Backend (Node.js + Express)
         ↓
 MongoDB Atlas
 ```
-
+<p align="center">
+  <img src="docs/hld.png" alt="HLD" width="600" />
+</p>
 ---
 
 ## Tech Stack
@@ -75,7 +81,9 @@ MongoDB Atlas
 * MongoDB Atlas
 
 ---
-
+<p align="center">
+  <img src="docs/lld.png" alt="LLD" width="600" />
+</p>
 ## Project Structure
 
 ```
@@ -88,7 +96,7 @@ Hostel-Sanitation-Ticket-Management/
 │   ├── middleware/
 │   └── index.js│
 └── frontend/ (original web app)
-mobileApp/
+Cleantrack/
 │   ├── src/
 │   │   ├── screens/
 │   │   ├── navigation/
@@ -125,7 +133,7 @@ FRONTEND_URL=http://localhost:5173
 ### 3. Mobile App Setup (Expo)
 
 ```bash
-cd mobileApp
+cd Cleantrack
 npm install
 ```
 
