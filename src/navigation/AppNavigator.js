@@ -3,6 +3,7 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 
 import LoginScreen from "../screens/LoginScreen";
 import DashboardStudentScreen from "../screens/DashboardStudentScreen";
+import AllTicketsScreen from "../screens/AllTicketsScreen";
 
 const Stack = createNativeStackNavigator();
 
@@ -12,11 +13,18 @@ export default function AppNavigator({ isLoggedIn, setIsLoggedIn, role }) {
         <Stack.Navigator>
           {isLoggedIn ? (
             role === "student" ? (
+              <>
               <Stack.Screen name="DashboardStudent">
                 {(props) => (
                   <DashboardStudentScreen {...props} setIsLoggedIn={setIsLoggedIn} />
                 )}
               </Stack.Screen>
+              <Stack.Screen 
+                name="AllTickets" 
+                component={AllTicketsScreen}
+                options={{ headerShown: false }}
+              />
+              </>
             ) : (
               <Stack.Screen name="DashboardCaretaker">
                 {(props) => (
