@@ -26,9 +26,9 @@ export default function AppNavigator({ isLoggedIn, setIsLoggedIn, role }) {
               />
               </>
             ) : (
-              <Stack.Screen name="DashboardCaretaker">
+              <Stack.Screen name="DashboardStudent">
                 {(props) => (
-                  <DashboardCaretakerScreen {...props} setIsLoggedIn={setIsLoggedIn} />
+                  <DashboardStudentScreen {...props} setIsLoggedIn={setIsLoggedIn} />
                 )}
               </Stack.Screen>
             )
