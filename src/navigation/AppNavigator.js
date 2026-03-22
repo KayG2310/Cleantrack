@@ -14,7 +14,7 @@ export default function AppNavigator({ isLoggedIn, setIsLoggedIn, role }) {
           {isLoggedIn ? (
             role === "student" ? (
               <>
-              <Stack.Screen name="DashboardStudent">
+              <Stack.Screen name="CleanTrack">
                 {(props) => (
                   <DashboardStudentScreen {...props} setIsLoggedIn={setIsLoggedIn} />
                 )}
