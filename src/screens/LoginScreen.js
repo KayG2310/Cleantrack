@@ -35,7 +35,7 @@ export default function LoginScreen({ navigation , setIsLoggedIn}) {
       await AsyncStorage.setItem("token", data.token);
       await AsyncStorage.setItem("role", data.user.role);
 
-      Alert.alert("Success", "Login successful!");
+      // Alert.alert("Success", "Login successful!");
       setIsLoggedIn(true);
     } catch (err) {
         console.log("FULL ERROR:", err);

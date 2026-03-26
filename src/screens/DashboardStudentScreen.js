@@ -1,24 +1,12 @@
 import { useEffect, useState, useRef } from "react";
-import {
-    View,
-    Text,
-    StyleSheet,
-    ActivityIndicator,
-    ScrollView,
-    Alert,
-    Pressable,
-    TextInput,
-    Animated,
-    PanResponder,
-    Modal,
-    KeyboardAvoidingView,
-    Platform,
-    Svg,
-    Dimensions,
+import {View, Text, StyleSheet, ActivityIndicator,ScrollView,Alert,Pressable,TextInput,Animated, PanResponder,
+    Modal,KeyboardAvoidingView,Platform,Svg,Dimensions,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import API from "../services/api";
-
+import { RefreshControl } from "react-native";
+import * as ImagePicker from "expo-image-picker";
+import { Image } from "react-native";
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
 // ─── Creative date formatter ─────────────────────────────────────────────────
@@ -88,6 +76,13 @@ function TicketModal({ ticket, visible, onClose }) {
         return "#E9A84C";
     };
 
+    const photoUrl = ticket?.photoUrl;
+    const isValidPhotoUrl =
+        typeof photoUrl === "string" &&
+        photoUrl.trim().length > 0 &&
+        !["see more", "n/a", "na", "none", "null", "undefined"].includes(photoUrl.trim().toLowerCase()) &&
+        photoUrl.trim().startsWith("http");
+
     return (
         <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
             <Pressable style={styles.modalOverlay} onPress={onClose}>
@@ -103,6 +98,13 @@ function TicketModal({ ticket, visible, onClose }) {
                         </Text>
                     </View>
                     <Text style={styles.modalDesc}>{ticket.description}</Text>
+
+                    {isValidPhotoUrl ? (
+                        <Image source={{ uri: photoUrl }} style={styles.ticketPhoto} resizeMode="cover" />
+                    ) : (
+                        <Text style={styles.noPhotoText}>No photo available</Text>
+                    )}
+
                     <Pressable style={styles.modalClose} onPress={onClose}>
                         <Text style={styles.modalCloseText}>Close</Text>
                     </Pressable>
@@ -208,7 +210,7 @@ function TicketFlashcard({ tickets, navigation }) {
                 <Text style={styles.sectionTitle}>Your Tickets</Text>
                 <Pressable
                     style={styles.seeAllPill}
-                    onPress={() => navigation.navigate("AllTickets", { tickets })}
+                    onPress={() => navigation.navigate("AllTicketsScreen", { tickets })}
                 >
                     <Text style={styles.seeAll}>See all →</Text>
                 </Pressable>
@@ -255,7 +257,7 @@ function TicketFlashcard({ tickets, navigation }) {
             {tickets.length > MAX && (
                 <Pressable
                     style={styles.seeAllButton}
-                    onPress={() => navigation.navigate("AllTickets", { tickets })}
+                    onPress={() => navigation.navigate("AllTicketsScreen", { tickets })}
                 >
                     <Text style={styles.seeAllButtonText}>+{tickets.length - MAX} more tickets</Text>
                 </Pressable>
@@ -279,43 +281,75 @@ export default function DashboardStudentScreen({ navigation, setIsLoggedIn }) {
     const [showForm, setShowForm] = useState(false);
     const [title, setTitle] = useState("");
     const [description, setDescription] = useState("");
-
+    const [refreshing, setRefreshing] = useState(false);
+    const [image, setImage] = useState(null);
+    const [markingClean, setMarkingClean] = useState(false);
     const scrollRef = useRef(null);
+    const [cleanReminderShown, setCleanReminderShown] = useState(false);
+    const [cleanReminderVisible, setCleanReminderVisible] = useState(false);
     const formRef = useRef(null);
 
+    const fetchData = async () => {
+        try {
+            const token = await AsyncStorage.getItem("token");
+            const res = await API.get("/api/student/dashboard-student", {
+                headers: { Authorization: `Bearer ${token}` },
+            });
+            const payload = res.data || {};
+            const user = payload.user || {};
+            const room = payload.room || {};
+            setUserData({
+                id: user._id,
+                name: user.name,
+                email: user.email,
+                roomNumber: user.roomNumber || room.roomNumber,
+                caretaker: room.caretaker || "Unassigned",
+                lastCleaned: room.lastCleaned || null,
+            });
+            const ticketRes = await API.get(
+                `/api/tickets/student/${user.email}`,
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            setTickets(sortTicketsNewestFirst(ticketRes.data || []));
+        } catch (err) {
+            Alert.alert("Error", "Failed to load dashboard");
+            await AsyncStorage.removeItem("token");
+            setIsLoggedIn(false);
+        } finally {
+            setLoading(false);
+        }
+    };
     useEffect(() => {
-        const fetchData = async () => {
-            try {
-                const token = await AsyncStorage.getItem("token");
-                const res = await API.get("/api/student/dashboard-student", {
-                    headers: { Authorization: `Bearer ${token}` },
-                });
-                const payload = res.data || {};
-                const user = payload.user || {};
-                const room = payload.room || {};
-                setUserData({
-                    id: user._id,
-                    name: user.name,
-                    email: user.email,
-                    roomNumber: user.roomNumber || room.roomNumber,
-                    caretaker: room.caretaker || "Unassigned",
-                    lastCleaned: room.lastCleaned || null,
-                });
-                const ticketRes = await API.get(
-                    `/api/tickets/student/${user.email}`,
-                    { headers: { Authorization: `Bearer ${token}` } }
-                );
-                setTickets(sortTicketsNewestFirst(ticketRes.data || []));
-            } catch (err) {
-                Alert.alert("Error", "Failed to load dashboard");
-                navigation.navigate("Login");
-            } finally {
-                setLoading(false);
-            }
+        const init = async () => {
+            await fetchData();
+            setLoading(false);
         };
-        fetchData();
+        init();
     }, []);
 
+    useEffect(() => {
+        if (!userData?.lastCleaned) return;
+        if (cleanReminderShown) return;
+
+        const prevDate = new Date(userData.lastCleaned);
+        const diffMs = Date.now() - prevDate.getTime();
+        const diff48hMs = 2 * 24 * 60 * 60 * 1000;
+
+        if (!Number.isNaN(diffMs) && diffMs > diff48hMs) {
+            setCleanReminderShown(true);
+            setCleanReminderVisible(true);
+        }
+    }, [userData?.lastCleaned, cleanReminderShown]);
+    const onRefresh = async () => {
+        setRefreshing(true);
+        try {
+          await fetchData();
+        } catch (err) {
+          console.log(err);
+        } finally {
+          setRefreshing(false);   // 🔥 ALWAYS runs
+        }
+      };
     const handleRaiseTicket = () => {
         const next = !showForm;
         setShowForm(next);
@@ -330,22 +364,30 @@ export default function DashboardStudentScreen({ navigation, setIsLoggedIn }) {
     const handleCreateTicket = async () => {
         try {
             const token = await AsyncStorage.getItem("token");
+            const formData = new FormData();
+
+            formData.append("title", title);
+            formData.append("description", description);
+            formData.append("roomNumber", userData.roomNumber);
+
+            if (image) {
+            formData.append("photo", {
+                uri: image,
+                name: "photo.jpg",
+                type: "image/jpeg",
+            });
+            }
             const res = await API.post(
                 "/api/tickets/create",
-                {
-                    studentId: userData.id,
-                    studentEmail: userData.email,
-                    roomNumber: userData.roomNumber,
-                    title,
-                    description,
-                },
-                { headers: { Authorization: `Bearer ${token}` } }
+                formData,
+                { headers: { Authorization: `Bearer ${token}` ,"Content-Type": "multipart/form-data",} }
             );
             const created = res.data.ticket || res.data;
             setTickets((prev) => [created, ...prev]);
             setShowForm(false);
             setTitle("");
             setDescription("");
+            setImage(null);
             Alert.alert("Success", "Ticket created!");
         } catch (err) {
             Alert.alert("Error", "Failed to create ticket");
@@ -373,6 +415,40 @@ export default function DashboardStudentScreen({ navigation, setIsLoggedIn }) {
             </View>
         );
     }
+    const pickImage = async () => {
+        const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      
+        if (!permission.granted) {
+          Alert.alert("Permission required");
+          return;
+        }
+      
+        const result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          quality: 0.5,
+        });
+      
+        if (!result.canceled) {
+          setImage(result.assets[0].uri);
+        }
+      };
+
+    
+
+    const handleMarkAsClean = async () => {
+        setMarkingClean(true);
+
+        // UI update (at minimum). If your backend supports persisting this action,
+        // you can add the POST call inside this try block.
+        try {
+            const nowIso = new Date().toISOString();
+            setUserData((prevState) => ({ ...(prevState || {}), lastCleaned: nowIso }));
+        } catch (e) {
+            Alert.alert("Error", "Failed to mark as clean.");
+        } finally {
+            setMarkingClean(false);
+        }
+    };
 
     const cleaned = formatLastCleaned(userData.lastCleaned);
 
@@ -388,6 +464,12 @@ export default function DashboardStudentScreen({ navigation, setIsLoggedIn }) {
                 contentContainerStyle={styles.container}
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled"
+                refreshControl={
+                    <RefreshControl
+                    refreshing={refreshing}
+                    onRefresh={onRefresh}
+                    />
+                }
             >
                 {/* Background graphics */}
                 <BgGraphics />
@@ -432,11 +514,19 @@ export default function DashboardStudentScreen({ navigation, setIsLoggedIn }) {
                                 <Text style={styles.lastCleanedLine1}>{cleaned.line1}</Text>
                                 <Text style={styles.lastCleanedLine2}>{cleaned.line2}</Text>
                             </View>
-                            {userData.lastCleaned && (
-                                <View style={styles.lastCleanedBadge}>
-                                    <Text style={styles.lastCleanedBadgeText}>✓ Done</Text>
-                                </View>
-                            )}
+                            <Pressable
+                                style={({ pressed }) => [
+                                    styles.lastCleanedBadge,
+                                    pressed && !markingClean ? { opacity: 0.85 } : null,
+                                    markingClean ? { opacity: 0.7 } : null,
+                                ]}
+                                onPress={handleMarkAsClean}
+                                disabled={markingClean}
+                            >
+                                <Text style={styles.lastCleanedBadgeText}>
+                                    {markingClean ? "Updating..." : "Mark as clean"}
+                                </Text>
+                            </Pressable>
                         </View>
                     </View>
                 </View>
@@ -517,7 +607,20 @@ export default function DashboardStudentScreen({ navigation, setIsLoggedIn }) {
                                 }, 300);
                             }}
                         />
+                        <Pressable style={styles.uploadButton} onPress={pickImage}>
+                            <Text style={styles.uploadButtonText}>
+                                {image ? "Change Image" : "Upload Image"}
+                            </Text>
+                        </Pressable>
 
+                        {image ? (
+                            <View style={styles.imagePreviewWrap}>
+                                <Image source={{ uri: image }} style={styles.imagePreview} resizeMode="cover" />
+                                <Pressable style={styles.removeImageButton} onPress={() => setImage(null)}>
+                                    <Text style={styles.removeImageButtonText}>Remove</Text>
+                                </Pressable>
+                            </View>
+                        ) : null}
                         <Pressable style={styles.submitButton} onPress={handleCreateTicket}>
                             <Text style={styles.submitButtonText}>Submit Ticket</Text>
                         </Pressable>
@@ -526,6 +629,28 @@ export default function DashboardStudentScreen({ navigation, setIsLoggedIn }) {
 
                 <View style={{ height: 48 }} />
             </ScrollView>
+
+            <Modal
+                visible={cleanReminderVisible}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setCleanReminderVisible(false)}
+            >
+                <Pressable style={styles.cleanReminderOverlay} onPress={() => setCleanReminderVisible(false)}>
+                    <Pressable style={styles.cleanReminderCard} onPress={() => {}}>
+                        <View style={styles.cleanReminderIconWrap}>
+                            <Text style={styles.cleanReminderIcon}>🧹</Text>
+                        </View>
+                        <Text style={styles.cleanReminderTitle}>Cleaning reminder</Text>
+                        <Text style={styles.cleanReminderText}>
+                            It’s been more than 2 days since your room was last cleaned. Please get it cleaned.
+                        </Text>
+                        <Pressable style={styles.cleanReminderSkip} onPress={() => setCleanReminderVisible(false)}>
+                            <Text style={styles.cleanReminderButtonText}>Okay!</Text>
+                        </Pressable>
+                    </Pressable>
+                </Pressable>
+            </Modal>
         </KeyboardAvoidingView>
     );
 }
@@ -792,6 +917,54 @@ const styles = StyleSheet.create({
         color: TEXT_DARK, fontWeight: "500",
     },
     textArea: { height: 110, textAlignVertical: "top" },
+    uploadButton: {
+        marginTop: 2,
+        backgroundColor: GREEN_MINT,
+        paddingVertical: 14,
+        borderRadius: 16,
+        borderWidth: 1.5,
+        borderColor: GREEN_LIGHT,
+        shadowColor: GREEN_MID,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.18,
+        shadowRadius: 8,
+        elevation: 3,
+        alignItems: "center",
+        justifyContent: "center",
+        marginBottom: 14,
+    },
+    uploadButtonText: {
+        color: GREEN_DARK,
+        fontWeight: "800",
+        fontSize: 14,
+        letterSpacing: 0.2,
+    },
+    imagePreviewWrap: {
+        borderRadius: 18,
+        borderWidth: 1.5,
+        borderColor: GREEN_LIGHT,
+        backgroundColor: "#F8FBF9",
+        overflow: "hidden",
+        marginBottom: 16,
+    },
+    imagePreview: {
+        width: "100%",
+        height: 150,
+    },
+    removeImageButton: {
+        paddingVertical: 10,
+        paddingHorizontal: 12,
+        alignItems: "center",
+        justifyContent: "center",
+        borderTopWidth: 1,
+        borderTopColor: GREEN_LIGHT,
+        backgroundColor: "#FFF0F0",
+    },
+    removeImageButtonText: {
+        color: "#C0392B",
+        fontWeight: "800",
+        fontSize: 13,
+    },
     submitButton: {
         backgroundColor: GREEN_MID, paddingVertical: 16, borderRadius: 16, marginTop: 4,
         shadowColor: GREEN_MID, shadowOffset: { width: 0, height: 4 },
@@ -830,11 +1003,92 @@ const styles = StyleSheet.create({
         fontSize: 14, color: TEXT_GRAY, lineHeight: 22,
         marginBottom: 24,
     },
+    ticketPhoto: {
+        width: "100%",
+        height: 190,
+        borderRadius: 18,
+        marginBottom: 18,
+        backgroundColor: "#F2F2F2",
+    },
+    noPhotoText: {
+        fontSize: 13,
+        color: TEXT_GRAY,
+        lineHeight: 20,
+        marginBottom: 18,
+    },
     modalClose: {
         backgroundColor: GREEN_MINT, paddingVertical: 14, borderRadius: 16,
         borderWidth: 1.5, borderColor: GREEN_LIGHT,
     },
     modalCloseText: {
         color: GREEN_DARK, textAlign: "center", fontWeight: "700", fontSize: 14,
+    },
+
+    // Cleaning reminder popup
+    cleanReminderOverlay: {
+        flex: 1,
+        backgroundColor: "rgba(15,35,25,0.45)",
+        justifyContent: "center",
+        alignItems: "center",
+        paddingHorizontal: 18,
+    },
+    cleanReminderCard: {
+        width: "100%",
+        backgroundColor: WHITE,
+        borderRadius: 22,
+        padding: 18,
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.18,
+        shadowRadius: 12,
+        elevation: 8,
+    },
+    cleanReminderIconWrap: {
+        width: 48,
+        height: 48,
+        borderRadius: 16,
+        backgroundColor: GREEN_MINT,
+        justifyContent: "center",
+        alignItems: "center",
+        marginBottom: 10,
+    },
+    cleanReminderIcon: { fontSize: 20 },
+    cleanReminderTitle: {
+        fontSize: 17,
+        fontWeight: "800",
+        color: TEXT_DARK,
+        marginBottom: 6,
+    },
+    cleanReminderText: {
+        fontSize: 13,
+        color: TEXT_GRAY,
+        lineHeight: 19,
+        marginBottom: 14,
+    },
+    cleanReminderButton: {
+        backgroundColor: GREEN_MID,
+        paddingVertical: 12,
+        borderRadius: 16,
+        alignItems: "center",
+        marginBottom: 10,
+        shadowColor: GREEN_MID,
+        shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.2,
+        shadowRadius: 8,
+        elevation: 4,
+    },
+    cleanReminderButtonText: {
+        color: GREEN_MID,
+        fontWeight: "800",
+        fontSize: 14,
+    },
+    cleanReminderSkip: {
+        alignItems: "center",
+        paddingVertical: 6,
+    },
+    cleanReminderSkipText: {
+        color: GREEN_DARK,
+        fontWeight: "800",
+        fontSize: 13,
     },
 });

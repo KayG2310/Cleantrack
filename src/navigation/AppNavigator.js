@@ -8,11 +8,13 @@ import AllTicketsScreen from "../screens/AllTicketsScreen";
 const Stack = createNativeStackNavigator();
 
 export default function AppNavigator({ isLoggedIn, setIsLoggedIn, role }) {
+    const normalizedRole = typeof role === "string" ? role.toLowerCase() : "";
+
     return (
       <NavigationContainer>
         <Stack.Navigator>
           {isLoggedIn ? (
-            role === "student" ? (
+            normalizedRole === "student" ? (
               <>
               <Stack.Screen name="CleanTrack">
                 {(props) => (
@@ -20,7 +22,7 @@ export default function AppNavigator({ isLoggedIn, setIsLoggedIn, role }) {
                 )}
               </Stack.Screen>
               <Stack.Screen 
-                name="AllTickets" 
+                name="AllTicketsScreen" 
                 component={AllTicketsScreen}
                 options={{ headerShown: false }}
               />
