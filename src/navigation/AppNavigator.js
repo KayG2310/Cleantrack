@@ -4,7 +4,7 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import LoginScreen from "../screens/LoginScreen";
 import DashboardStudentScreen from "../screens/DashboardStudentScreen";
 import AllTicketsScreen from "../screens/AllTicketsScreen";
-
+import AnnouncementsScreen from "../screens/AnnouncementsScreen";
 const Stack = createNativeStackNavigator();
 
 export default function AppNavigator({ isLoggedIn, setIsLoggedIn, role }) {
@@ -14,7 +14,6 @@ export default function AppNavigator({ isLoggedIn, setIsLoggedIn, role }) {
       <NavigationContainer>
         <Stack.Navigator>
           {isLoggedIn ? (
-            normalizedRole === "student" ? (
               <>
               <Stack.Screen name="CleanTrack">
                 {(props) => (
@@ -26,14 +25,9 @@ export default function AppNavigator({ isLoggedIn, setIsLoggedIn, role }) {
                 component={AllTicketsScreen}
                 options={{ headerShown: false }}
               />
+              <Stack.Screen name="Announcements" component={AnnouncementsScreen} />
               </>
-            ) : (
-              <Stack.Screen name="DashboardStudent">
-                {(props) => (
-                  <DashboardStudentScreen {...props} setIsLoggedIn={setIsLoggedIn} />
-                )}
-              </Stack.Screen>
-            )
+            
           ) : (
             <Stack.Screen name="Login">
               {(props) => (

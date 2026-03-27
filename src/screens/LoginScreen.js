@@ -182,7 +182,7 @@ const styles = StyleSheet.create({
   // Brand section
   brandSection: {
     alignItems: "center",
-    paddingTop: 100,
+    paddingTop: 40,
     paddingBottom: 32,
     zIndex: 1,
   },
@@ -206,7 +206,7 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     color: TEXT_DARK,
     letterSpacing: -0.8,
-    marginBottom: 6,
+    marginBottom: 0,
   },
   tagline: {
     fontSize: 14,

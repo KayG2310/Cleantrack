@@ -1,12 +1,15 @@
 import { useEffect, useState, useRef } from "react";
-import {View, Text, StyleSheet, ActivityIndicator,ScrollView,Alert,Pressable,TextInput,Animated, PanResponder,
-    Modal,KeyboardAvoidingView,Platform,Svg,Dimensions,
+import {
+    View, Text, StyleSheet, ActivityIndicator, ScrollView, Alert, Pressable, TextInput, Animated, PanResponder,
+    Modal, KeyboardAvoidingView, Platform, Svg, Dimensions,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import API from "../services/api";
 import { RefreshControl } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { Image } from "react-native";
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { Picker } from "@react-native-picker/picker";
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
 // ─── Creative date formatter ─────────────────────────────────────────────────
@@ -86,7 +89,7 @@ function TicketModal({ ticket, visible, onClose }) {
     return (
         <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
             <Pressable style={styles.modalOverlay} onPress={onClose}>
-                <Pressable style={styles.modalCard} onPress={() => {}}>
+                <Pressable style={styles.modalCard} onPress={() => { }}>
                     <View style={styles.modalHandle} />
                     <View style={styles.modalHeader}>
                         <View style={[styles.modalDot, { backgroundColor: statusDotColor(ticket.status) }]} />
@@ -254,14 +257,14 @@ function TicketFlashcard({ tickets, navigation }) {
                 ))}
             </View>
 
-            {tickets.length > MAX && (
+            {/* {tickets.length > MAX && (
                 <Pressable
                     style={styles.seeAllButton}
                     onPress={() => navigation.navigate("AllTicketsScreen", { tickets })}
                 >
                     <Text style={styles.seeAllButtonText}>+{tickets.length - MAX} more tickets</Text>
                 </Pressable>
-            )}
+            )} */}
 
             <TicketModal
                 ticket={modalTicket}
@@ -283,6 +286,8 @@ export default function DashboardStudentScreen({ navigation, setIsLoggedIn }) {
     const [description, setDescription] = useState("");
     const [refreshing, setRefreshing] = useState(false);
     const [image, setImage] = useState(null);
+    const [floor, setFloor] = useState("1");
+    const [location, setLocation] = useState("Own Room");
     const [markingClean, setMarkingClean] = useState(false);
     const scrollRef = useRef(null);
     const [cleanReminderShown, setCleanReminderShown] = useState(false);
@@ -326,7 +331,12 @@ export default function DashboardStudentScreen({ navigation, setIsLoggedIn }) {
         };
         init();
     }, []);
-
+    useEffect(() => {
+        if (userData?.roomNumber) {
+            const derivedFloor = Math.floor(Number(userData.roomNumber) / 100).toString();
+            setFloor(derivedFloor);
+        }
+    }, [userData]);
     useEffect(() => {
         if (!userData?.lastCleaned) return;
         if (cleanReminderShown) return;
@@ -343,13 +353,13 @@ export default function DashboardStudentScreen({ navigation, setIsLoggedIn }) {
     const onRefresh = async () => {
         setRefreshing(true);
         try {
-          await fetchData();
+            await fetchData();
         } catch (err) {
-          console.log(err);
+            console.log(err);
         } finally {
-          setRefreshing(false);   // 🔥 ALWAYS runs
+            setRefreshing(false);   // 🔥 ALWAYS runs
         }
-      };
+    };
     const handleRaiseTicket = () => {
         const next = !showForm;
         setShowForm(next);
@@ -369,18 +379,19 @@ export default function DashboardStudentScreen({ navigation, setIsLoggedIn }) {
             formData.append("title", title);
             formData.append("description", description);
             formData.append("roomNumber", userData.roomNumber);
-
+            formData.append("floorSelected", floor);
+            formData.append("locationSelected", location);
             if (image) {
-            formData.append("photo", {
-                uri: image,
-                name: "photo.jpg",
-                type: "image/jpeg",
-            });
+                formData.append("photo", {
+                    uri: image,
+                    name: "photo.jpg",
+                    type: "image/jpeg",
+                });
             }
             const res = await API.post(
                 "/api/tickets/create",
                 formData,
-                { headers: { Authorization: `Bearer ${token}` ,"Content-Type": "multipart/form-data",} }
+                { headers: { Authorization: `Bearer ${token}`, "Content-Type": "multipart/form-data", } }
             );
             const created = res.data.ticket || res.data;
             setTickets((prev) => [created, ...prev]);
@@ -417,32 +428,43 @@ export default function DashboardStudentScreen({ navigation, setIsLoggedIn }) {
     }
     const pickImage = async () => {
         const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      
-        if (!permission.granted) {
-          Alert.alert("Permission required");
-          return;
-        }
-      
-        const result = await ImagePicker.launchImageLibraryAsync({
-          mediaTypes: ImagePicker.MediaTypeOptions.Images,
-          quality: 0.5,
-        });
-      
-        if (!result.canceled) {
-          setImage(result.assets[0].uri);
-        }
-      };
 
-    
+        if (!permission.granted) {
+            Alert.alert("Permission required");
+            return;
+        }
+
+        const result = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            quality: 0.5,
+        });
+
+        if (!result.canceled) {
+            setImage(result.assets[0].uri);
+        }
+    };
+
+
 
     const handleMarkAsClean = async () => {
         setMarkingClean(true);
 
         // UI update (at minimum). If your backend supports persisting this action,
         // you can add the POST call inside this try block.
+
         try {
-            const nowIso = new Date().toISOString();
-            setUserData((prevState) => ({ ...(prevState || {}), lastCleaned: nowIso }));
+            const token = await AsyncStorage.getItem("token");
+            const res = await API.post(
+                "/api/student/mark-clean",
+                {},
+                {
+                    headers: { Authorization: `Bearer ${token}` },
+                }
+            );
+            setUserData((prev) => ({
+                ...prev,
+                lastCleaned: res.data.room.lastCleaned,
+            }))
         } catch (e) {
             Alert.alert("Error", "Failed to mark as clean.");
         } finally {
@@ -451,28 +473,30 @@ export default function DashboardStudentScreen({ navigation, setIsLoggedIn }) {
     };
 
     const cleaned = formatLastCleaned(userData.lastCleaned);
-
+    
+    
     return (
         <KeyboardAvoidingView
             style={{ flex: 1 }}
-            behavior={Platform.OS === "ios" ? "padding" : "height"}
-            keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
+            behavior={Platform.OS === "ios" ? "padding" : undefined}
+            keyboardVerticalOffset={Platform.OS === "ios" ? 40 : 20}
+            enabled={true}
         >
             <ScrollView
                 ref={scrollRef}
                 style={styles.scrollView}
                 contentContainerStyle={styles.container}
                 showsVerticalScrollIndicator={false}
-                keyboardShouldPersistTaps="handled"
+                keyboardShouldPersistTaps="always"
                 refreshControl={
                     <RefreshControl
-                    refreshing={refreshing}
-                    onRefresh={onRefresh}
+                        refreshing={refreshing}
+                        onRefresh={onRefresh}
                     />
                 }
             >
                 {/* Background graphics */}
-                <BgGraphics />
+                <BgGraphics style={{ position: "absolute", zIndex: -1 }} />
 
                 {/* ── TOP BAR ── */}
                 <View style={styles.topBar}>
@@ -480,9 +504,19 @@ export default function DashboardStudentScreen({ navigation, setIsLoggedIn }) {
                         <Text style={styles.greeting}>Good day 🌿</Text>
                         <Text style={styles.userName}>{userData.name}</Text>
                     </View>
-                    <Pressable style={styles.logoutButton} onPress={handleLogout}>
-                        <Text style={styles.logoutText}>Log out</Text>
-                    </Pressable>
+
+                    <View style={styles.rightSection}>
+
+                        <Pressable
+                            onPress={() => navigation.navigate("Announcements")}
+                            style={styles.iconButton}
+                        >
+                            <Ionicons name="notifications" color={GREEN_DARK} size={24} />
+                        </Pressable>
+                        <Pressable style={styles.logoutButton} onPress={handleLogout}>
+                            <Text style={styles.logoutText}>Log out</Text>
+                        </Pressable>
+                    </View>
                 </View>
 
                 {/* ── HERO CARD ── */}
@@ -607,6 +641,39 @@ export default function DashboardStudentScreen({ navigation, setIsLoggedIn }) {
                                 }, 300);
                             }}
                         />
+                        <Text style={styles.inputLabel}>Floor</Text>
+                        <View style={styles.pickerContainer}>
+                            
+                                <Picker
+                                    selectedValue={floor}   // ✅ USE STATE (NOT recalculation)
+                                    onValueChange={(itemValue) => setFloor(itemValue)}
+                                >
+                                    <Picker.Item label="1st Floor" value="1" />
+                                    <Picker.Item label="2nd Floor" value="2" />
+                                    <Picker.Item label="3rd Floor" value="3" />
+                                    <Picker.Item label="4th Floor" value="4" />
+                                    <Picker.Item label="5th Floor" value="5" />
+                                </Picker>
+                            
+                        </View>
+
+                        <Text style={styles.inputLabel}>Location</Text>
+                        <View style={styles.pickerContainer}>
+                           
+                                <Picker
+                                    selectedValue={location}   // ✅ REQUIRED
+                                    onValueChange={(itemValue) => setLocation(itemValue)}
+                                >
+                                    <Picker.Item label="Own Room" value="Own Room" />
+                                    <Picker.Item label="Left Washroom" value="Left Washroom" />
+                                    <Picker.Item label="Right Washroom" value="Right Washroom" />
+                                    <Picker.Item label="Balcony" value="Balcony" />
+                                    <Picker.Item label="Water Cooler" value="Water Cooler" />
+                                    <Picker.Item label="Staircase" value="Stairs" />
+                                    <Picker.Item label="Lift" value="Lift" />
+                                </Picker>
+                            
+                        </View>
                         <Pressable style={styles.uploadButton} onPress={pickImage}>
                             <Text style={styles.uploadButtonText}>
                                 {image ? "Change Image" : "Upload Image"}
@@ -637,7 +704,7 @@ export default function DashboardStudentScreen({ navigation, setIsLoggedIn }) {
                 onRequestClose={() => setCleanReminderVisible(false)}
             >
                 <Pressable style={styles.cleanReminderOverlay} onPress={() => setCleanReminderVisible(false)}>
-                    <Pressable style={styles.cleanReminderCard} onPress={() => {}}>
+                    <Pressable style={styles.cleanReminderCard} onPress={() => { }}>
                         <View style={styles.cleanReminderIconWrap}>
                             <Text style={styles.cleanReminderIcon}>🧹</Text>
                         </View>
@@ -657,16 +724,16 @@ export default function DashboardStudentScreen({ navigation, setIsLoggedIn }) {
 
 
 // ─── DESIGN TOKENS ───────────────────────────────────────────────────────────
-const GREEN_DARK  = "#1E5C3A";
-const GREEN_MID   = "#4CAF77";
+const GREEN_DARK = "#1E5C3A";
+const GREEN_MID = "#4CAF77";
 const GREEN_LIGHT = "#D4EDE0";
-const GREEN_MINT  = "#EEF8F1";
-const GREEN_HERO  = "#2A7A4F";
-const CREAM       = "#F7FAF8";
-const TEXT_DARK   = "#152820";
-const TEXT_GRAY   = "#6A8C77";
-const TEXT_MUTED  = "#9DBDAA";
-const WHITE       = "#FFFFFF";
+const GREEN_MINT = "#EEF8F1";
+const GREEN_HERO = "#2A7A4F";
+const CREAM = "#F7FAF8";
+const TEXT_DARK = "#152820";
+const TEXT_GRAY = "#6A8C77";
+const TEXT_MUTED = "#9DBDAA";
+const WHITE = "#FFFFFF";
 
 
 // ─── BACKGROUND GRAPHICS ────────────────────────────────────────────────────
@@ -700,7 +767,7 @@ const bg = StyleSheet.create({
 const styles = StyleSheet.create({
 
     scrollView: { flex: 1, backgroundColor: CREAM },
-    container: { paddingHorizontal: 20, paddingTop: 56, paddingBottom: 20 },
+    container: { paddingHorizontal: 20, paddingTop: 36, paddingBottom: 20 },
     center: {
         flex: 1, justifyContent: "center", alignItems: "center",
         backgroundColor: CREAM, gap: 12,
@@ -1090,5 +1157,20 @@ const styles = StyleSheet.create({
         color: GREEN_DARK,
         fontWeight: "800",
         fontSize: 13,
+    },
+    topBar: {
+        flexDirection: "row",
+        justifyContent: "space-between",
+        alignItems: "center",
+        marginBottom: 15,
+    },
+
+    rightSection: {
+        flexDirection: "row",
+        alignItems: "center",
+    },
+
+    iconButton: {
+        marginRight: 10,
     },
 });
