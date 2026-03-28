@@ -47,6 +47,12 @@ function sortTicketsNewestFirst(tickets) {
     return [...tickets].sort((a, b) => ts(b) - ts(a));
 }
 
+const JANITOR_ROLES = [
+    { key: "roomCleaner", label: "Room cleaner", subtitle: "Your room", icon: "home-outline" },
+    { key: "corridorCleaner", label: "Corridor cleaner", subtitle: "Hallway & common areas", icon: "layers-outline" },
+    { key: "washroomCleaner", label: "Washroom cleaner", subtitle: "Restrooms", icon: "water-outline" },
+];
+
 // ─── Light SVG Background ────────────────────────────────────────────────────
 function BgGraphics() {
     return (
@@ -288,6 +294,12 @@ export default function DashboardStudentScreen({ navigation, setIsLoggedIn }) {
     const [image, setImage] = useState(null);
     const [floor, setFloor] = useState("1");
     const [location, setLocation] = useState("Own Room");
+    const [ratings, setRatings] = useState({
+        roomCleaner: 0,
+        corridorCleaner: 0,
+        washroomCleaner: 0,
+    });
+    const [submittingRole, setSubmittingRole] = useState(null);
     const [markingClean, setMarkingClean] = useState(false);
     const scrollRef = useRef(null);
     const [cleanReminderShown, setCleanReminderShown] = useState(false);
@@ -444,8 +456,6 @@ export default function DashboardStudentScreen({ navigation, setIsLoggedIn }) {
         }
     };
 
-
-
     const handleMarkAsClean = async () => {
         setMarkingClean(true);
 
@@ -472,9 +482,62 @@ export default function DashboardStudentScreen({ navigation, setIsLoggedIn }) {
         }
     };
 
+    const renderStars = (type) => (
+        <View style={styles.ratingStarsRow}>
+            {[1, 2, 3, 4, 5].map((star) => {
+                const filled = ratings[type] >= star;
+                return (
+                    <Pressable
+                        key={star}
+                        hitSlop={8}
+                        onPress={() =>
+                            setRatings((prev) => ({
+                                ...prev,
+                                [type]: star,
+                            }))
+                        }
+                        style={styles.ratingStarHit}
+                    >
+                        <Ionicons
+                            name={filled ? "star" : "star-outline"}
+                            size={26}
+                            color={filled ? GREEN_MID : TEXT_MUTED}
+                        />
+                    </Pressable>
+                );
+            })}
+        </View>
+    );
+
+    const clearRating = (roleKey) => {
+        setRatings((prev) => ({ ...prev, [roleKey]: 0 }));
+    };
+
+    const handleSubmitRating = async (roleKey) => {
+        const value = ratings[roleKey];
+        if (!value || value < 1) {
+            Alert.alert("Select a rating", "Choose a star rating before submitting.");
+            return;
+        }
+        setSubmittingRole(roleKey);
+        try {
+            const token = await AsyncStorage.getItem("token");
+            await API.post(
+                "/api/student/rate",
+                { ratings: { [roleKey]: value } },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            Alert.alert("Success", "Rating submitted!");
+            setRatings((prev) => ({ ...prev, [roleKey]: 0 }));
+        } catch (err) {
+            Alert.alert("Error", "Failed to submit rating");
+        } finally {
+            setSubmittingRole(null);
+        }
+    };
     const cleaned = formatLastCleaned(userData.lastCleaned);
-    
-    
+
+
     return (
         <KeyboardAvoidingView
             style={{ flex: 1 }}
@@ -643,36 +706,36 @@ export default function DashboardStudentScreen({ navigation, setIsLoggedIn }) {
                         />
                         <Text style={styles.inputLabel}>Floor</Text>
                         <View style={styles.pickerContainer}>
-                            
-                                <Picker
-                                    selectedValue={floor}   // ✅ USE STATE (NOT recalculation)
-                                    onValueChange={(itemValue) => setFloor(itemValue)}
-                                >
-                                    <Picker.Item label="1st Floor" value="1" />
-                                    <Picker.Item label="2nd Floor" value="2" />
-                                    <Picker.Item label="3rd Floor" value="3" />
-                                    <Picker.Item label="4th Floor" value="4" />
-                                    <Picker.Item label="5th Floor" value="5" />
-                                </Picker>
-                            
+
+                            <Picker
+                                selectedValue={floor}   // ✅ USE STATE (NOT recalculation)
+                                onValueChange={(itemValue) => setFloor(itemValue)}
+                            >
+                                <Picker.Item label="1st Floor" value="1" />
+                                <Picker.Item label="2nd Floor" value="2" />
+                                <Picker.Item label="3rd Floor" value="3" />
+                                <Picker.Item label="4th Floor" value="4" />
+                                <Picker.Item label="5th Floor" value="5" />
+                            </Picker>
+
                         </View>
 
                         <Text style={styles.inputLabel}>Location</Text>
                         <View style={styles.pickerContainer}>
-                           
-                                <Picker
-                                    selectedValue={location}   // ✅ REQUIRED
-                                    onValueChange={(itemValue) => setLocation(itemValue)}
-                                >
-                                    <Picker.Item label="Own Room" value="Own Room" />
-                                    <Picker.Item label="Left Washroom" value="Left Washroom" />
-                                    <Picker.Item label="Right Washroom" value="Right Washroom" />
-                                    <Picker.Item label="Balcony" value="Balcony" />
-                                    <Picker.Item label="Water Cooler" value="Water Cooler" />
-                                    <Picker.Item label="Staircase" value="Stairs" />
-                                    <Picker.Item label="Lift" value="Lift" />
-                                </Picker>
-                            
+
+                            <Picker
+                                selectedValue={location}   // ✅ REQUIRED
+                                onValueChange={(itemValue) => setLocation(itemValue)}
+                            >
+                                <Picker.Item label="Own Room" value="Own Room" />
+                                <Picker.Item label="Left Washroom" value="Left Washroom" />
+                                <Picker.Item label="Right Washroom" value="Right Washroom" />
+                                <Picker.Item label="Balcony" value="Balcony" />
+                                <Picker.Item label="Water Cooler" value="Water Cooler" />
+                                <Picker.Item label="Staircase" value="Stairs" />
+                                <Picker.Item label="Lift" value="Lift" />
+                            </Picker>
+
                         </View>
                         <Pressable style={styles.uploadButton} onPress={pickImage}>
                             <Text style={styles.uploadButtonText}>
@@ -694,7 +757,72 @@ export default function DashboardStudentScreen({ navigation, setIsLoggedIn }) {
                     </View>
                 )}
 
-                <View style={{ height: 48 }} />
+                <View style={{ height: 32 }} />
+
+                {/* Staff rating — card layout aligned with ticket form */}
+                <View style={styles.ratingSection}>
+                    <View style={styles.sectionHeader}>
+                        <View style={styles.ratingSectionTitleCol}>
+                            <Text style={styles.sectionTitle}>Rate staff</Text>
+                            <Text style={styles.ratingSectionSubtitle}>
+                                Rate your janitors to let the caretaker know about their performance!
+                            </Text>
+                        </View>
+                    </View>
+
+                    {JANITOR_ROLES.map((role) => (
+                        <View key={role.key} style={styles.ratingCard}>
+                            <View style={styles.ratingCardTop}>
+                                <View style={styles.ratingIconWrap}>
+                                    <Ionicons name={role.icon} size={22} color={GREEN_DARK} />
+                                </View>
+                                <View style={styles.ratingCardTitleBlock}>
+                                    <Text style={styles.ratingCardTitle}>{role.label}</Text>
+                                    <Text style={styles.ratingCardHint}>{role.subtitle}</Text>
+                                </View>
+                            </View>
+                            {renderStars(role.key)}
+                            <View style={styles.ratingActionsRow}>
+                                <Pressable
+                                    style={({ pressed }) => [
+                                        styles.ratingClearButton,
+                                        pressed && ratings[role.key] > 0 && styles.ratingClearButtonPressed,
+                                    ]}
+                                    onPress={() => clearRating(role.key)}
+                                    disabled={ratings[role.key] === 0}
+                                >
+                                    <Text
+                                        style={[
+                                            styles.ratingClearButtonText,
+                                            ratings[role.key] === 0 && styles.ratingClearButtonTextMuted,
+                                        ]}
+                                    >
+                                        Clear
+                                    </Text>
+                                </Pressable>
+                                <Pressable
+                                    style={({ pressed }) => [
+                                        styles.ratingSubmitButton,
+                                        pressed && ratings[role.key] > 0 && submittingRole !== role.key
+                                            ? styles.ratingSubmitButtonPressed
+                                            : null,
+                                        (ratings[role.key] === 0 || submittingRole === role.key)
+                                            ? styles.ratingSubmitButtonDisabled
+                                            : null,
+                                    ]}
+                                    onPress={() => handleSubmitRating(role.key)}
+                                    disabled={ratings[role.key] === 0 || submittingRole === role.key}
+                                >
+                                    {submittingRole === role.key ? (
+                                        <ActivityIndicator color={WHITE} size="small" />
+                                    ) : (
+                                        <Text style={styles.ratingSubmitButtonText}>Submit</Text>
+                                    )}
+                                </Pressable>
+                            </View>
+                        </View>
+                    ))}
+                </View>
             </ScrollView>
 
             <Modal
@@ -1172,5 +1300,129 @@ const styles = StyleSheet.create({
 
     iconButton: {
         marginRight: 10,
+    },
+
+    ratingSection: {
+        marginTop: 8,
+        marginBottom: 8,
+    },
+    ratingSectionTitleCol: {
+        flex: 1,
+    },
+    ratingSectionSubtitle: {
+        fontSize: 13,
+        color: TEXT_GRAY,
+        lineHeight: 19,
+        marginTop: 6,
+        paddingRight: 8,
+    },
+    ratingCard: {
+        backgroundColor: WHITE,
+        borderRadius: 24,
+        padding: 20,
+        marginBottom: 14,
+        borderWidth: 1.5,
+        borderColor: GREEN_LIGHT,
+        shadowColor: GREEN_DARK,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.06,
+        shadowRadius: 12,
+        elevation: 3,
+    },
+    ratingCardTop: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 14,
+        marginBottom: 16,
+    },
+    ratingIconWrap: {
+        width: 48,
+        height: 48,
+        borderRadius: 16,
+        backgroundColor: GREEN_MINT,
+        justifyContent: "center",
+        alignItems: "center",
+        borderWidth: 1.5,
+        borderColor: GREEN_LIGHT,
+    },
+    ratingCardTitleBlock: {
+        flex: 1,
+    },
+    ratingCardTitle: {
+        fontSize: 16,
+        fontWeight: "800",
+        color: TEXT_DARK,
+        letterSpacing: -0.3,
+    },
+    ratingCardHint: {
+        fontSize: 12,
+        color: TEXT_MUTED,
+        marginTop: 3,
+        fontWeight: "500",
+    },
+    ratingStarsRow: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 6,
+        marginBottom: 18,
+    },
+    ratingStarHit: {
+        paddingVertical: 4,
+        paddingHorizontal: 2,
+    },
+    ratingActionsRow: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 12,
+    },
+    ratingClearButton: {
+        flex: 1,
+        paddingVertical: 14,
+        borderRadius: 16,
+        borderWidth: 1.5,
+        borderColor: GREEN_LIGHT,
+        backgroundColor: GREEN_MINT,
+        alignItems: "center",
+        justifyContent: "center",
+    },
+    ratingClearButtonPressed: {
+        opacity: 0.88,
+    },
+    ratingClearButtonText: {
+        color: GREEN_DARK,
+        fontWeight: "800",
+        fontSize: 14,
+        letterSpacing: 0.2,
+    },
+    ratingClearButtonTextMuted: {
+        color: TEXT_MUTED,
+        fontWeight: "700",
+    },
+    ratingSubmitButton: {
+        flex: 1,
+        paddingVertical: 14,
+        borderRadius: 16,
+        backgroundColor: GREEN_MID,
+        alignItems: "center",
+        justifyContent: "center",
+        shadowColor: GREEN_MID,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.22,
+        shadowRadius: 8,
+        elevation: 4,
+    },
+    ratingSubmitButtonPressed: {
+        opacity: 0.9,
+    },
+    ratingSubmitButtonDisabled: {
+        opacity: 0.45,
+        shadowOpacity: 0,
+        elevation: 0,
+    },
+    ratingSubmitButtonText: {
+        color: WHITE,
+        fontWeight: "800",
+        fontSize: 14,
+        letterSpacing: 0.25,
     },
 });
